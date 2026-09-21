@@ -13,9 +13,13 @@ import { dirname, extname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { configFromEnv, send } from './capi.ts';
-import { evaluateEligibility, eventNameFor } from './funnel.ts';
+import { decideOutbound, evaluateEligibility } from './funnel.ts';
+import { memoryStore } from './idempotency.ts';
 import { partition } from './phi.ts';
 import { retain } from './store.ts';
+
+// One per process. See idempotency.ts for why this is an interface.
+const seen = memoryStore();
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const PUBLIC_DIR = join(ROOT, 'public');
@@ -67,19 +71,20 @@ const server = createServer(async (req, res) => {
         eligibility: { eligible: eligibility.eligible, code: eligibility.code },
       });
 
-      const eventName = eventNameFor(eligibility);
+      const outbound = decideOutbound(eligibility, answers);
       let capi = null;
-      if (eventName) {
+      if (outbound.send) {
         capi = await send(
           {
             eventId,
-            eventName,
+            eventName: outbound.eventName,
             answers,
             sourceUrl: body.sourceUrl,
             clientIp: req.socket.remoteAddress ?? undefined,
             userAgent: req.headers['user-agent'],
           },
           configFromEnv(),
+          { seen },
         );
       }
 
@@ -87,6 +92,7 @@ const server = createServer(async (req, res) => {
       res.end(
         JSON.stringify({
           eligibility,
+          outbound,
           // Field names only. The values stay on the server.
           retainedFields: Object.keys(retained),
           matchableFields: Object.keys(matchable),

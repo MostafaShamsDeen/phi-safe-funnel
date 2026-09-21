@@ -124,13 +124,28 @@ export function evaluateEligibility(answers: Record<string, string>): Eligibilit
   return { eligible: true };
 }
 
+export type OutboundDecision =
+  | { send: true; eventName: 'Lead' }
+  | { send: false; reason: 'not_eligible' | 'no_consent' };
+
 /**
- * Which advertising event a completed submission maps to.
+ * Whether anything goes to the advertising platform, and under what name.
  *
- * Always generic. The temptation is to fire "SleepConsultBooked" so the ad
- * platform can optimise per condition, and that single decision is how a
- * compliant stack becomes a non-compliant one.
+ * Two gates, and the order is the point. Consent is checked before eligibility
+ * is even relevant, because a visitor who has not agreed to marketing tracking
+ * should not generate an advertising event whatever else is true about them.
+ * The event name is always generic: the temptation is to fire
+ * "SleepConsultBooked" so the platform can optimise per condition, and that one
+ * decision is how a compliant stack becomes a non-compliant one.
+ *
+ * This is the code version of the sequencing argument. A consent banner that
+ * gates a script the server fires anyway is decoration.
  */
-export function eventNameFor(result: EligibilityResult): 'Lead' | null {
-  return result.eligible ? 'Lead' : null;
+export function decideOutbound(
+  result: EligibilityResult,
+  answers: Record<string, string>,
+): OutboundDecision {
+  if (answers.consent_marketing !== 'yes') return { send: false, reason: 'no_consent' };
+  if (!result.eligible) return { send: false, reason: 'not_eligible' };
+  return { send: true, eventName: 'Lead' };
 }

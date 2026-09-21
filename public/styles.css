@@ -105,6 +105,19 @@ button.choice:hover { border-color: var(--accent); }
 .field label { display: block; font-size: 12.5px; color: var(--muted); margin-bottom: 4px; }
 .field input { cursor: text; }
 
+.consent {
+  display: flex;
+  gap: 9px;
+  align-items: flex-start;
+  font-size: 12.5px;
+  color: var(--muted);
+  line-height: 1.45;
+  margin: 12px 0 2px;
+  cursor: pointer;
+}
+
+.consent input { margin-top: 2px; accent-color: var(--accent); flex: none; }
+
 button.submit {
   font: inherit;
   margin-top: 8px;

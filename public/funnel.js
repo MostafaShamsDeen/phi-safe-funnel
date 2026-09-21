@@ -159,6 +159,14 @@ function render() {
       field.innerHTML = `<label for="${name}">${label}</label><input id="${name}" name="${name}" type="${type}" />`;
       wrap.append(field);
     }
+    const consent = document.createElement('label');
+    consent.className = 'consent';
+    consent.innerHTML =
+      '<input type="checkbox" id="consent_marketing" /> ' +
+      '<span>I agree to analytics and marketing cookies. Leave this unticked to see the gate work: ' +
+      'the submission is still processed, and nothing reaches the advertising platform.</span>';
+    wrap.append(consent);
+
     const go = document.createElement('button');
     go.className = 'submit';
     go.textContent = 'Submit';
@@ -168,6 +176,7 @@ function render() {
         if (value) answers[name] = value;
       }
       answers.country = 'US';
+      answers.consent_marketing = document.getElementById('consent_marketing').checked ? 'yes' : 'no';
       if (!answers.email) return;
       submit();
     };
@@ -201,12 +210,17 @@ function render() {
 }
 
 async function submit() {
-  // The browser half of the dedup pair. A real deployment calls fbq here; with
-  // no pixel configured we log the same arguments so the shared id is visible.
-  if (typeof window.fbq === 'function') {
-    window.fbq('track', 'Lead', {}, { eventID: eventId });
+  // The browser half of the dedup pair, behind the same gate as the server half.
+  // A consent banner that gates the pixel while the server fires anyway is
+  // decoration, so both sides check the same answer.
+  if (answers.consent_marketing === 'yes') {
+    if (typeof window.fbq === 'function') {
+      window.fbq('track', 'Lead', {}, { eventID: eventId });
+    } else {
+      console.log('[pixel] fbq("track", "Lead", {}, { eventID: "%s" })', eventId);
+    }
   } else {
-    console.log('[pixel] fbq("track", "Lead", {}, { eventID: "%s" })', eventId);
+    console.log('[pixel] suppressed: no marketing consent');
   }
 
   screenEl.innerHTML = '<p class="question">Sending…</p>';
@@ -232,13 +246,21 @@ async function submit() {
   again.onclick = () => window.location.reload();
   screenEl.append(again);
 
+  const suppressed = {
+    no_consent: 'No advertising event fired: marketing consent was not given.',
+    not_eligible: 'No advertising event fired: the visitor was not eligible.',
+  };
+
   resultEl.hidden = false;
   resultEl.innerHTML = `
     <h3>What the server did</h3>
-    <p class="verdict">${data.eligibility.eligible ? 'Lead event built' : 'No advertising event fired'}</p>
+    <p class="verdict">${data.outbound.send ? 'Lead event built' : suppressed[data.outbound.reason]}</p>
     <p class="dedup">
-      Browser pixel and server event share <code>event_id ${eventId}</code>, which is how Meta
-      collapses them into one conversion.
+      ${
+        data.outbound.send
+          ? `Browser pixel and server event share <code>event_id ${eventId}</code>, which is how Meta collapses them into one conversion.`
+          : 'The pixel was suppressed in the browser as well, not just on the server. Check the console.'
+      }
       ${data.capi ? `Mode: <code>${data.capi.mode}</code>.` : ''}
     </p>
     ${data.capi ? `<pre>${JSON.stringify(data.capi.payload, null, 2)}</pre>` : ''}

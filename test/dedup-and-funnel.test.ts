@@ -11,7 +11,7 @@ import { test, describe } from 'node:test';
 
 import { buildPayload } from '../src/capi.ts';
 import { hashField, normaliseEmail, normalisePhone, normaliseZip, sha256 } from '../src/hash.ts';
-import { STEPS, evaluateEligibility, eventNameFor, nextStep } from '../src/funnel.ts';
+import { STEPS, decideOutbound, evaluateEligibility, nextStep } from '../src/funnel.ts';
 
 const CONTACT = { email: 'a@b.com', state: 'CA', over_18: 'yes' };
 
@@ -98,8 +98,17 @@ describe('funnel branching and eligibility', () => {
   });
 
   test('no advertising event fires for an ineligible visitor', () => {
-    assert.equal(eventNameFor(evaluateEligibility({ state: 'OTHER', over_18: 'yes' })), null);
-    assert.equal(eventNameFor(evaluateEligibility({ state: 'CA', over_18: 'yes' })), 'Lead');
+    const ineligible = { state: 'OTHER', over_18: 'yes', consent_marketing: 'yes' };
+    const eligible = { state: 'CA', over_18: 'yes', consent_marketing: 'yes' };
+
+    assert.deepEqual(decideOutbound(evaluateEligibility(ineligible), ineligible), {
+      send: false,
+      reason: 'not_eligible',
+    });
+    assert.deepEqual(decideOutbound(evaluateEligibility(eligible), eligible), {
+      send: true,
+      eventName: 'Lead',
+    });
   });
 
   test('every step field is classified in phi.ts', async () => {

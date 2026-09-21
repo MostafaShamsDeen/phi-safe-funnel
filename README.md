@@ -1,11 +1,13 @@
 # phi-safe-funnel
 
+[![tests](https://github.com/MostafaShamsDeen/phi-safe-funnel/actions/workflows/test.yml/badge.svg)](https://github.com/MostafaShamsDeen/phi-safe-funnel/actions/workflows/test.yml)
+
 A telehealth-style eligibility funnel with a hard boundary between protected health
 information and advertising conversion data.
 
 Health answers stay on the server. The advertising platform receives a hashed
-identifier, a generic event name, and nothing else. A test suite fails if that
-ever stops being true.
+identifier, a generic event name, and nothing else. A test suite fails if that ever
+stops being true.
 
 No dependencies, no build step, no `npm install`.
 
@@ -18,9 +20,29 @@ Node 22.6 or newer, because the TypeScript runs directly.
 
 ---
 
+## What you see when you run it
+
+The funnel is on the left. On the right, every answer appears in one of two columns
+as you give it, so the split is visible while it happens rather than described
+afterwards.
+
+```
+Stays on the server                  Leaves, hashed
+─────────────────────────            ──────────────────────────────
+over_18    yes                       state       sha256(ca)
+condition  sleep                     first_name  sha256(mostafa)
+symptoms   under_1_month             last_name   sha256(shamseldeen)
+consent_marketing  yes               email       sha256(mostafa@example.com)
+                                     phone       sha256(96171557148)
+                                     zip         sha256(90210)
+```
+
+Submitting prints the exact Conversions API payload that was built, and says whether
+it was sent, suppressed, or skipped as a duplicate.
+
 ## What this is
 
-Three things sit together here that are usually written about separately:
+Four things that are usually written about separately:
 
 1. **A multi-step funnel with branching and an eligibility gate.** State, age, reason
    for visit, duration, contact. The duration question is skipped when the reason is
@@ -28,11 +50,13 @@ Three things sit together here that are usually written about separately:
 2. **Meta Conversions API from the server**, with normalisation, SHA-256 hashing, and
    `event_id` deduplication against the browser pixel.
 3. **A field-level PHI boundary** that decides, per field, what is allowed to leave.
+4. **A consent gate in front of both halves**, because a banner that gates the pixel
+   while the server fires anyway is decoration.
 
-The third is the reason the first two are interesting. Server-side tracking in a
-regulated setting is not hard because of the HTTP call. It is hard because the
-default posture of every analytics integration is to send everything it can, and in
-a health context that default is a disclosure.
+The third and fourth are the reason the first two are interesting. Server-side
+tracking in a regulated setting is not hard because of the HTTP call. It is hard
+because the default posture of every analytics integration is to send everything it
+can, and in a health context that default is a disclosure.
 
 ## The boundary
 
@@ -45,7 +69,7 @@ silently start leaking it. There is a test for exactly that.
 | **May leave, hashed** | email, phone, first name, last name, state, zip, country |
 | **Never leaves** | condition, symptoms, medications, diagnosis, pregnancy status, height, weight, date of birth, insurance id |
 
-Two decisions in there are worth explaining.
+Three decisions in there are worth explaining.
 
 **Date of birth is on the deny list even though Meta accepts it** and it would raise
 the match quality score. In a health intake, a date of birth combined with the fact
@@ -54,13 +78,26 @@ address is not. The extra match quality is not worth that trade.
 
 **Event names are controlled, not just fields.** A hashed email is not PHI. A hashed
 email attached to an event called `SleepConsultBooked` is, because the event name
-carries the condition. Outbound event names are restricted to a generic allowlist,
-and `buildPayload` throws on anything else. This is the mistake that turns a
-compliant stack into a non-compliant one, and it is one line of code to make.
+carries the condition. Outbound event names are restricted to a generic allowlist and
+`buildPayload` throws on anything else. This is the mistake that turns a compliant
+stack into a non-compliant one, and it is one line of code to make.
 
 **URLs are stripped of query strings** before being sent as `event_source_url`.
 Intake funnels routinely carry answers in the query string, and a URL is the most
 common way health data reaches a vendor by accident.
+
+## The consent gate
+
+`decideOutbound` checks consent **before** eligibility, and returns a reason rather
+than a boolean, so the caller cannot accidentally treat "no consent" as "not
+interesting". No consent means no advertising event, whatever else is true about the
+visitor.
+
+The browser half is gated on the same answer. Both sides read one field, which is the
+whole point: sequencing that exists only in the banner is not sequencing.
+
+Leave the consent box unticked when you run it. The submission is still processed and
+still retained, and nothing goes out.
 
 ## Deduplication
 
@@ -71,24 +108,39 @@ The id is generated **once, in the browser**, and travels to both places. It is 
 generated on the server, because two ids means two conversions, which inflates
 reporting and misleads bidding while looking like good news on a dashboard.
 
-`test/dedup-and-funnel.test.ts` pins that contract.
+## Sending once, and retrying only what a retry can fix
+
+Meta deduplicates on `event_id` at their end, so a double send is usually survivable.
+That is not a reason to send twice. Remote deduplication is a safety net owned by
+someone else and it only holds inside their matching window, so `send` consults a
+`SeenStore` first and skips anything already delivered.
+
+The in-memory implementation is honest about being correct for one process and wrong
+for two, which is why it is an interface rather than a `Set`. A real deployment swaps
+in Redis or a unique index.
+
+Retries cover 408, 429 and 5xx, with exponential backoff, and honour `Retry-After`
+when the server sends one. A 400 is not retried: the payload is wrong and will be
+just as wrong in two seconds, so retrying only delays the error and triples the log
+noise. **A failed send is not recorded as seen**, so it can be retried later without
+being mistaken for a duplicate.
 
 ## Normalisation
 
-Each platform documents normalisation slightly differently, and getting it wrong
-never throws. It silently lowers match quality, which is the kind of defect that
-survives for months because nothing looks broken. The rules live in `src/hash.ts`
-with test vectors against them.
+Each platform documents normalisation slightly differently, and getting it wrong never
+throws. It silently lowers match quality, which is the kind of defect that survives
+for months because nothing looks broken. The rules live in `src/hash.ts` with test
+vectors against them.
 
 - Email: trimmed, lowercased, plus-addressing preserved
 - Phone: digits only, country code kept, international `00` prefix dropped
 - Names and state: lowercased, letters only
 - Zip: first five characters
-- Empty values are omitted rather than sent as the hash of an empty string, which is
-  a real value and pollutes match quality
+- Empty values are omitted rather than sent as the hash of an empty string, which is a
+  real value and pollutes match quality
 
-The live panel in the browser shows the **normalised** value inside `sha256(...)`,
-not the value as typed, so the preview cannot tell you a comforting lie.
+The live panel shows the **normalised** value inside `sha256(...)`, not the value as
+typed, so the preview cannot tell you a comforting lie.
 
 ## Running it against a real pixel
 
@@ -96,9 +148,9 @@ Everything above is demonstrable with no Meta account. With no credentials set, 
 server builds the payload, validates it, and returns exactly what it would have sent.
 
 To send for real, copy `.env.example` to `.env` and fill in the pixel id and access
-token. Set `META_TEST_EVENT_CODE` from Events Manager > Test events and the events
-land in the test view instead of your reporting, which is how to watch deduplication
-work without touching a live campaign's numbers.
+token. Set `META_TEST_EVENT_CODE` from Events Manager > Test events and the events land
+in the test view instead of your reporting, which is how to watch deduplication work
+without touching a live campaign's numbers.
 
 ## Tests
 
@@ -106,14 +158,18 @@ work without touching a live campaign's numbers.
 node --test "test/**/*.test.ts"
 ```
 
-19 tests. The ones that matter:
+29 tests. The ones that matter:
 
 - Health answers never reach the payload, raw or hashed
 - `assertNoPhi` throws rather than degrading when a retained value appears
 - An unclassified field is retained, not sent
 - Condition-specific event names are refused
 - Query strings are stripped from the event source URL
+- No consent means no event, and consent is checked before eligibility
 - The server event carries the browser's `event_id` unchanged
+- The same `event_id` is not sent twice, and the second attempt never reaches the network
+- A failed send is not recorded, so it can be retried
+- 500 is retried, 400 is not, and `Retry-After` beats the backoff
 - Every field the funnel writes is classified in `phi.ts`
 
 The hashed check is the important half of the first one. Hashing a condition does not
@@ -122,8 +178,8 @@ make it safe to send, it just makes the leak harder to see in a network tab.
 ## What this is not
 
 - **Not a compliance product, and not legal advice.** Field-level separation is one
-  control among many. It does not substitute for a business associate agreement, a
-  risk analysis, access controls, audit logging, encryption at rest, or counsel.
+  control among many. It does not substitute for a business associate agreement, a risk
+  analysis, access controls, audit logging, encryption at rest, or counsel.
 - **Not production code.** The store is a JSONL file standing in for a real system
   inside the covered entity's own infrastructure.
 - **No real PHI anywhere in this repository.** The `data/` directory is gitignored.
@@ -133,14 +189,15 @@ make it safe to send, it just makes the leak harder to see in a network tab.
 ## Layout
 
 ```
-src/phi.ts        the boundary: classification, partitioning, URL stripping
-src/hash.ts       normalisation and SHA-256, with the per-platform rules
-src/capi.ts       payload construction, assertNoPhi, send with dry-run mode
-src/funnel.ts     steps, branching, server-side eligibility
-src/store.ts      the retained side, deliberately boring
-src/server.ts     ~120 lines of node:http, no framework
-public/           the funnel, and a live view of where each answer goes
-test/             19 tests
+src/phi.ts           the boundary: classification, partitioning, URL stripping
+src/hash.ts          normalisation and SHA-256, with the per-platform rules
+src/capi.ts          payload construction, assertNoPhi, retries, send
+src/idempotency.ts   send-once, as an interface rather than a Set
+src/funnel.ts        steps, branching, eligibility, the consent gate
+src/store.ts         the retained side, deliberately boring
+src/server.ts        ~130 lines of node:http, no framework
+public/              the funnel, and a live view of where each answer goes
+test/                29 tests
 ```
 
 ## Licence

@@ -15,6 +15,7 @@
  */
 
 import { hashField, META_KEYS, sha256 } from './hash.ts';
+import type { SeenStore } from './idempotency.ts';
 import { isAllowedEventName, partition, safeSourceUrl } from './phi.ts';
 
 export interface CapiConfig {
@@ -111,7 +112,75 @@ export function assertNoPhi(payload: CapiPayload, answers: Record<string, string
 
 export type SendResult =
   | { mode: 'dry-run'; payload: CapiPayload; reason: string }
-  | { mode: 'sent'; payload: CapiPayload; status: number; body: unknown };
+  | { mode: 'duplicate'; payload: CapiPayload; reason: string }
+  | { mode: 'sent'; payload: CapiPayload; status: number; attempts: number; body: unknown }
+  | { mode: 'failed'; payload: CapiPayload; status?: number; attempts: number; error: string };
+
+export interface SendOptions {
+  seen?: SeenStore;
+  attempts?: number;
+  baseDelayMs?: number;
+  /** Injected in tests. Defaults to global fetch. */
+  fetchImpl?: typeof fetch;
+}
+
+const RETRYABLE = new Set([408, 429, 500, 502, 503, 504]);
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Retries on the failures that a retry can actually fix.
+ *
+ * 5xx, 429 and a dropped connection are worth trying again. A 400 means the
+ * payload is wrong and will be just as wrong in two seconds, so retrying it
+ * only delays the error and triples the log noise. Retry-After is honoured
+ * when present, because guessing a backoff when the server has told you the
+ * answer is rude.
+ */
+async function postWithRetry(
+  url: string,
+  payload: CapiPayload,
+  options: Required<Pick<SendOptions, 'attempts' | 'baseDelayMs'>> & { fetchImpl: typeof fetch },
+): Promise<{ status: number; body: unknown; attempts: number } | { error: string; status?: number; attempts: number }> {
+  let lastError = 'unknown error';
+  let lastStatus: number | undefined;
+
+  for (let attempt = 1; attempt <= options.attempts; attempt++) {
+    try {
+      const response = await options.fetchImpl(url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+
+      if (response.ok) {
+        return { status: response.status, body: await response.json().catch(() => null), attempts: attempt };
+      }
+
+      lastStatus = response.status;
+      lastError = `HTTP ${response.status}`;
+
+      if (!RETRYABLE.has(response.status) || attempt === options.attempts) {
+        return { error: lastError, status: response.status, attempts: attempt };
+      }
+
+      // Retry-After: 0 is a real instruction, not a missing value, so the
+      // comparison is >= rather than >.
+      const header = response.headers?.get?.('retry-after');
+      const retryAfter = header === null || header === undefined ? NaN : Number(header);
+      const delay = Number.isFinite(retryAfter) && retryAfter >= 0
+        ? retryAfter * 1000
+        : options.baseDelayMs * 2 ** (attempt - 1);
+      await sleep(delay);
+    } catch (error) {
+      lastError = (error as Error).message;
+      if (attempt === options.attempts) return { error: lastError, attempts: attempt };
+      await sleep(options.baseDelayMs * 2 ** (attempt - 1));
+    }
+  }
+
+  return { error: lastError, status: lastStatus, attempts: options.attempts };
+}
 
 /**
  * Sends when credentials are present, and otherwise returns exactly what it
@@ -121,9 +190,18 @@ export type SendResult =
 export async function send(
   input: BuildInput,
   config: CapiConfig = {},
+  options: SendOptions = {},
 ): Promise<SendResult> {
   const payload = buildPayload(input, config);
   assertNoPhi(payload, input.answers);
+
+  if (options.seen && (await options.seen.has(input.eventId))) {
+    return {
+      mode: 'duplicate',
+      payload,
+      reason: `event_id ${input.eventId} has already been sent. Not sending again.`,
+    };
+  }
 
   if (!config.pixelId || !config.accessToken) {
     return {
@@ -136,18 +214,20 @@ export async function send(
   const version = config.apiVersion ?? 'v21.0';
   const url = `https://graph.facebook.com/${version}/${config.pixelId}/events?access_token=${encodeURIComponent(config.accessToken)}`;
 
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(payload),
+  const result = await postWithRetry(url, payload, {
+    attempts: options.attempts ?? 3,
+    baseDelayMs: options.baseDelayMs ?? 200,
+    fetchImpl: options.fetchImpl ?? fetch,
   });
 
-  return {
-    mode: 'sent',
-    payload,
-    status: response.status,
-    body: await response.json().catch(() => null),
-  };
+  if ('error' in result) {
+    return { mode: 'failed', payload, status: result.status, attempts: result.attempts, error: result.error };
+  }
+
+  // Recorded only after a confirmed send, so a failure can still be retried.
+  if (options.seen) await options.seen.add(input.eventId);
+
+  return { mode: 'sent', payload, status: result.status, attempts: result.attempts, body: result.body };
 }
 
 export function configFromEnv(): CapiConfig {
