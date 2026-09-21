@@ -1,7 +1,5 @@
 # phi-safe-funnel
 
-[![tests](https://github.com/MostafaShamsDeen/phi-safe-funnel/actions/workflows/test.yml/badge.svg)](https://github.com/MostafaShamsDeen/phi-safe-funnel/actions/workflows/test.yml)
-
 A telehealth-style eligibility funnel with a hard boundary between protected health
 information and advertising conversion data.
 
