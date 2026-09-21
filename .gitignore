@@ -1,0 +1,13 @@
+# Intake answers. A demo about not leaking health data should not commit any.
+data/
+*.jsonl
+
+.env
+.env.local
+
+node_modules/
+.DS_Store
+Thumbs.db
+
+# local dev server config
+.claude/

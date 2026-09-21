@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>PHI-safe funnel</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <header class="masthead">
+      <div>
+        <h1>Eligibility funnel with a hard PHI boundary</h1>
+        <p class="sub">
+          A telehealth-style intake flow. Health answers stay on the server. The advertising
+          platform receives a hashed identifier, a generic event name, and nothing else.
+        </p>
+      </div>
+      <span class="mode" id="mode">checking mode…</span>
+    </header>
+
+    <main>
+      <section class="panel funnel" aria-label="Funnel">
+        <div class="progress"><div class="progress-bar" id="progress"></div></div>
+        <div id="screen"></div>
+      </section>
+
+      <section class="panel boundary" aria-label="The boundary">
+        <h2>Where each answer goes</h2>
+        <p class="hint">Updates as you answer. Nothing is sent until the last step.</p>
+        <div class="columns">
+          <div class="column retained">
+            <h3>Stays on the server</h3>
+            <p class="col-sub">Retained, and in production would sit inside a system covered by a BAA.</p>
+            <ul id="retained-list" class="chips"></ul>
+          </div>
+          <div class="column sent">
+            <h3>Leaves, hashed</h3>
+            <p class="col-sub">Match keys only, SHA-256 of a normalised value.</p>
+            <ul id="matchable-list" class="chips"></ul>
+          </div>
+        </div>
+        <div id="result" class="result" hidden></div>
+      </section>
+    </main>
+
+    <script src="/funnel.js" type="module"></script>
+  </body>
+</html>

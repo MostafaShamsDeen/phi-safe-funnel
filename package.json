@@ -1,0 +1,24 @@
+{
+  "name": "phi-safe-funnel",
+  "version": "1.0.0",
+  "description": "A telehealth-style eligibility funnel with a hard boundary between protected health information and advertising conversion data. Meta Conversions API with event_id deduplication. No dependencies.",
+  "type": "module",
+  "engines": {
+    "node": ">=22.6.0"
+  },
+  "scripts": {
+    "start": "node src/server.ts",
+    "test": "node --test \"test/**/*.test.ts\""
+  },
+  "keywords": [
+    "conversions-api",
+    "meta-capi",
+    "server-side-tracking",
+    "event-deduplication",
+    "hipaa",
+    "phi",
+    "eligibility-funnel"
+  ],
+  "author": "Mostafa Shams El Deen",
+  "license": "MIT"
+}
