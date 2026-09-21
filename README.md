@@ -20,23 +20,15 @@ Node 22.6 or newer, because the TypeScript runs directly.
 
 ## What you see when you run it
 
-The funnel is on the left. On the right, every answer appears in one of two columns
-as you give it, so the split is visible while it happens rather than described
-afterwards.
+![The funnel on the left, and a live view of which answers stay on the server and which leave as hashed match keys](docs/boundary.png)
 
-```
-Stays on the server                  Leaves, hashed
-─────────────────────────            ──────────────────────────────
-over_18    yes                       state       sha256(ca)
-condition  sleep                     first_name  sha256(mostafa)
-symptoms   under_1_month             last_name   sha256(shamseldeen)
-consent_marketing  yes               email       sha256(mostafa@example.com)
-                                     phone       sha256(96171557148)
-                                     zip         sha256(90210)
-```
+Every answer appears in one of two columns as you give it, so the split is visible
+while it happens rather than described afterwards. The hashes shown are of the
+**normalised** value, not the value as typed, so the preview cannot tell you a
+comforting lie.
 
 Submitting prints the exact Conversions API payload that was built, and says whether
-it was sent, suppressed, or skipped as a duplicate.
+it was sent, suppressed for lack of consent, or skipped as a duplicate.
 
 ## What this is
 
